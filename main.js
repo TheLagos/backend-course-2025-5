@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { program } from 'commander';
+import superagent from 'superagent';
 
 program
     .option('-h, --host <address>', "Server address", 'localhost')
@@ -18,18 +19,36 @@ if (!options.cache) {
 }
 
 const cacheDir = path.resolve(options.cache);
+const CAT_API_URL = 'https://http.cat';
 
-async function handleGet(req, res, filePath) {
+async function fetchFromOrigin(res, filePath, httpCode) {
+    try {
+        const url = `${CAT_API_URL}/${httpCode}`;
+        const response = await superagent.get(url).responseType('arraybuffer');
+        
+        await fs.writeFile(filePath, response.body);
+        console.log(`[CACHE STORED] Stored ${httpCode}.jpeg in cache.`);
+
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        res.end(response.body);
+
+    } catch (error) {
+        console.error(`[ORIGIN FAIL] Failed to fetch ${httpCode} from ${CAT_API_URL}: ${error.message}`);
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Image Not Found on origin server');
+    }
+}
+
+async function handleGet(req, res, filePath, httpCode) {
     try {
         const data = await fs.readFile(filePath);
-        console.log(`[CACHE HIT] Serving ${path.basename(filePath)} from cache.`);
+        console.log(`[CACHE HIT] Serving ${httpCode}.jpeg from cache.`);
         res.writeHead(200, { 'Content-Type': 'image/jpeg' });
         res.end(data);
     } catch (error) {
         if (error.code === 'ENOENT') {
-            console.log(`[CACHE MISS] ${path.basename(filePath)} not in cache.`);
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not Found in cache');
+            console.log(`[CACHE MISS] ${httpCode}.jpeg not in cache. Fetching from origin...`);
+            await fetchFromOrigin(res, filePath, httpCode);
         } else {
             console.error(`Error reading file: ${error.message}`);
             res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -95,7 +114,7 @@ async function requestHandler(req, res) {
 
     switch (method) {
         case 'GET':
-            await handleGet(req, res, filePath);
+            await handleGet(req, res, filePath, httpCode);
             break;
         case 'PUT':
             await handlePut(req, res, filePath);
